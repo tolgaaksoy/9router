@@ -15,6 +15,7 @@ import {
   QWEN_CONFIG,
   QODER_CONFIG,
   QODER_CN_CONFIG,
+  ZED_CONFIG,
   IFLOW_CONFIG,
   ANTIGRAVITY_CONFIG,
   GITHUB_CONFIG,
@@ -39,6 +40,13 @@ import {
   extractCodexAccountInfo,
   fetchKiroProfileArn,
 } from "./providerHelpers";
+import {
+  createZedNativeAuthData,
+  decryptZedAccessToken,
+  fetchZedAuthenticatedUser,
+  parseZedCallbackPayload,
+  resolveZedOrganizationId,
+} from "open-sse/shared/zedAuth.js";
 
 export { extractCodexAccountInfo, fetchKiroProfileArn };
 
@@ -467,6 +475,92 @@ const PROVIDERS = {
           userId,
           hasGrokCodeAccess: extra?.user?.hasGrokCodeAccess ?? null,
           subscriptionTier: extra?.user?.subscriptionTier ?? null,
+        },
+      };
+    },
+  },
+
+  zed: {
+    config: ZED_CONFIG,
+    flowType: "native_app_signin",
+    generateAuthData: async (config, redirectUri) => {
+      let nativeAppPort = config.defaultNativeAppPort || 58443;
+      try {
+        const parsed = new URL(redirectUri || "");
+        const port = Number(parsed.port || (parsed.protocol === "https:" ? 443 : 80));
+        if (Number.isFinite(port) && port > 0 && port < 65536 && port !== 80 && port !== 443) {
+          nativeAppPort = port;
+        }
+      } catch {
+        // Keep default native app port.
+      }
+      const state = generateState();
+      const authData = await createZedNativeAuthData(config, { nativeAppPort });
+      return {
+        authUrl: authData.authUrl,
+        state,
+        codeVerifier: authData.privateKeyVerifier,
+        codeChallenge: null,
+        redirectUri,
+        flowType: "native_app_signin",
+        fixedPort: nativeAppPort,
+        callbackPath: "/",
+        _zedNativeAppPort: nativeAppPort,
+        _zedSystemId: authData.systemId,
+      };
+    },
+    exchangeToken: async (config, callbackPayload, redirectUri, privateKeyVerifier, _state, meta = {}) => {
+      const parsed = parseZedCallbackPayload(callbackPayload);
+      const accessToken = decryptZedAccessToken(parsed.encryptedAccessToken, privateKeyVerifier);
+      const systemId = meta._zedSystemId || meta.systemId || "";
+      const credentials = {
+        accessToken,
+        providerSpecificData: {
+          userId: parsed.userId,
+          systemId,
+        },
+      };
+      const userInfo = await fetchZedAuthenticatedUser(credentials, { config });
+      return {
+        access_token: accessToken,
+        user_id: parsed.userId,
+        system_id: systemId,
+        user_info: userInfo,
+      };
+    },
+    mapTokens: (tokens) => {
+      const user = tokens.user_info?.user || {};
+      const defaultOrganizationId = resolveZedOrganizationId(
+        { providerSpecificData: { userId: tokens.user_id } },
+        tokens.user_info,
+      );
+      const organizations = (tokens.user_info?.organizations || []).map((org) => ({
+        id: typeof org?.id === "string" ? org.id : String(org?.id || ""),
+        name: String(org?.name || ""),
+        isPersonal: !!org?.is_personal,
+      })).filter((org) => org.id);
+      const githubLogin = user.github_login || user.username || "";
+      const zedEmail = user.email || "";
+      const accountIdentifier = zedEmail || githubLogin || (tokens.user_id ? `zed-user-${tokens.user_id}` : null);
+      const displayName = user.name || user.username || githubLogin || accountIdentifier || null;
+      return {
+        accessToken: tokens.access_token,
+        refreshToken: null,
+        expiresIn: null,
+        name: displayName || accountIdentifier,
+        email: accountIdentifier,
+        displayName,
+        providerSpecificData: {
+          authMethod: "native_app_signin",
+          userId: tokens.user_id,
+          systemId: tokens.system_id || "",
+          username: user.username || "",
+          githubLogin,
+          email: zedEmail,
+          avatarUrl: user.avatar_url || "",
+          defaultOrganizationId,
+          organizationId: defaultOrganizationId,
+          organizations,
         },
       };
     },
@@ -1564,6 +1658,9 @@ export async function generateAuthData(providerName, redirectUri, meta) {
   const config = provider.prepareConfig
     ? await provider.prepareConfig(provider.config, meta || {})
     : provider.config;
+  if (provider.generateAuthData) {
+    return provider.generateAuthData(config, redirectUri, meta || {});
+  }
   const { codeVerifier, codeChallenge, state } = generatePKCE(provider.pkceVerifierBytes);
 
   let authUrl;
@@ -1708,5 +1805,34 @@ export async function backfillCodexEmails() {
   } catch (err) {
     codexBackfillDone = false;
     console.log("backfillCodexEmails failed:", err?.message || err);
+  }
+}
+
+let zedNameBackfillDone = false;
+
+// Older Zed connections used github_login as the connection name because the
+// native sign-in endpoint redirects through GitHub. Prefer Zed's display name
+// when the user has not explicitly renamed the connection.
+export async function backfillZedConnectionNames() {
+  if (zedNameBackfillDone) return;
+  zedNameBackfillDone = true;
+  try {
+    const { getProviderConnections, updateProviderConnection } = await import("@/lib/localDb");
+    const connections = await getProviderConnections();
+    const targets = connections.filter((c) => {
+      if (c.provider !== "zed" || c.authType !== "oauth") return false;
+      const displayName = String(c.displayName || "").trim();
+      if (!displayName) return false;
+      const name = String(c.name || "").trim();
+      if (!name || name === displayName) return false;
+      const githubLogin = String(c.providerSpecificData?.githubLogin || "").trim();
+      return name === c.email || name === githubLogin || /^Account \d+$/.test(name) || /^zed-user-/.test(name);
+    });
+    for (const conn of targets) {
+      await updateProviderConnection(conn.id, { name: conn.displayName });
+    }
+  } catch (err) {
+    zedNameBackfillDone = false;
+    console.log("backfillZedConnectionNames failed:", err?.message || err);
   }
 }

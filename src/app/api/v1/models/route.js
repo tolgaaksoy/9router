@@ -9,6 +9,7 @@ import { getProviderConnections, getCombos, getCustomModels, getModelAliases } f
 import { getDisabledModels } from "@/lib/disabledModelsDb";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
+import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveCopilotModels } from "open-sse/services/copilotModels.js";
 import { resolveClinepassModels } from "open-sse/services/clinepassModels.js";
@@ -105,6 +106,15 @@ const LIVE_MODEL_RESOLVERS = {
       },
     });
     return result?.models?.length ? { models: result.models } : null;
+  },
+  zed: async (conn) => {
+    const result = await resolveZedModels({
+      accessToken: conn.accessToken,
+      providerSpecificData: conn.providerSpecificData || {},
+    });
+    return result?.models?.length ? {
+      models: result.models.map((model) => ({ id: model.id, name: model.name })),
+    } : null;
   },
 };
 
