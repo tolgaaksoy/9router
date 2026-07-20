@@ -20,6 +20,7 @@ import {
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
 import { fetchZedAuthenticatedUser, getZedModelRequestDiagnostics } from "open-sse/shared/zedAuth.js";
+import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -790,6 +791,27 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${connection.apiKey}` },
           body: JSON.stringify({ model: getDefaultModel("opencode-go"), messages: [{ role: "user", content: "ping" }], max_tokens: 1, stream: false }),
+        }, effectiveProxy);
+        const valid = res.status !== 401 && res.status !== 403;
+        return { valid, error: valid ? null : "Invalid API key" };
+      }
+      case "commandcode": {
+        const config = PROVIDERS.commandcode;
+        const model = getDefaultModel("commandcode");
+        const payload = openaiToCommandCodeRequest(model, {
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+          stream: false,
+        }, false);
+        const res = await fetchWithConnectionProxy(config.baseUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(config.headers || {}),
+            "x-session-id": crypto.randomUUID(),
+            "Authorization": `Bearer ${connection.apiKey}`,
+          },
+          body: JSON.stringify(payload),
         }, effectiveProxy);
         const valid = res.status !== 401 && res.status !== 403;
         return { valid, error: valid ? null : "Invalid API key" };
