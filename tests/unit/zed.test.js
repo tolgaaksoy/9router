@@ -10,6 +10,7 @@ import { DEFAULT_SAFETY_SETTINGS } from "../../open-sse/translator/formats/gemin
 describe("Zed authentication helpers", () => {
   it("uses Google safety enum values accepted by Zed", () => {
     expect(DEFAULT_SAFETY_SETTINGS.every((setting) => setting.threshold === "BLOCK_NONE")).toBe(true);
+    expect(DEFAULT_SAFETY_SETTINGS.map((setting) => setting.category)).not.toContain("HARM_CATEGORY_CIVIC_INTEGRITY");
   });
 
   it("round-trips the native-app private key verifier", () => {
