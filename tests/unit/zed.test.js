@@ -5,8 +5,13 @@ import {
   encodeZedPrivateKeyVerifier,
   parseZedCallbackPayload,
 } from "../../open-sse/shared/zedAuth.js";
+import { DEFAULT_SAFETY_SETTINGS } from "../../open-sse/translator/formats/gemini.js";
 
 describe("Zed authentication helpers", () => {
+  it("uses Google safety enum values accepted by Zed", () => {
+    expect(DEFAULT_SAFETY_SETTINGS.every((setting) => setting.threshold === "BLOCK_NONE")).toBe(true);
+  });
+
   it("round-trips the native-app private key verifier", () => {
     const privateKey = "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----";
     expect(decodeZedPrivateKeyVerifier(encodeZedPrivateKeyVerifier(privateKey))).toBe(privateKey);
