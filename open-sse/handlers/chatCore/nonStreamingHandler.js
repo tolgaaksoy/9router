@@ -2,6 +2,7 @@ import { FORMATS } from "../../translator/formats.js";
 import { needsTranslation } from "../../translator/index.js";
 import { fromOpenAIFinish } from "../../translator/concerns/finishReason.js";
 import { ollamaBodyToOpenAI } from "../../translator/response/ollama-to-openai.js";
+import { unwrapClinepassEnvelope } from "../../utils/clinepassEnvelope.js";
 import { addBufferToUsage, filterUsageForFormat } from "../../utils/usageTracking.js";
 import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
@@ -229,6 +230,13 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
         console.error("[ChatCore] onRequestSuccess failed:", err?.message || err);
       });
   }
+
+  const { body: unwrappedBody, error: envelopeError } = unwrapClinepassEnvelope(responseBody, provider);
+  if (envelopeError) {
+    appendLog({ status: `FAILED ${HTTP_STATUS.BAD_GATEWAY}` });
+    return createErrorResult(HTTP_STATUS.BAD_GATEWAY, envelopeError.message);
+  }
+  responseBody = unwrappedBody;
 
   // Decloak tool_use names once on raw Claude body, before any translation (INPUT side)
   responseBody = decloakToolNames(responseBody, toolNameMap);
